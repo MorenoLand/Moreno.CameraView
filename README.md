@@ -1,29 +1,30 @@
-# Moreno.BlinkView
+# Windows tray viewer for Blink and Tapo cameras
 
-A compact Windows tray viewer for Blink cameras. It combines a Gio flyout panel with a loopback web UI, live H.264/AAC playback, Sync Module clips, and pop-out camera windows for multi-camera viewing.
+A compact Windows tray viewer for Blink and Tapo cameras. It combines a Gio flyout panel with a loopback web UI, live H.264/AAC playback, in-app clip playback, and pinned always-on-top camera windows.
 
 ## Features
 
-- Tray flyout with camera grid, live view, snapshots, arm/disarm, and sync status.
-- Live video with audio. Audio is only played by the panel camera that is open.
-- Sync Module local-storage clips plus Blink cloud clips when available.
+- Tray flyout with camera grid, live view, snapshots, arm/disarm, and Sync Module status.
+- Blink cloud cameras plus Tapo cameras over local RTSP with a Camera Account.
+- Pin cameras into frameless always-on-top windows with mute, wheel zoom, drag pan and resize; pinned cameras reopen on launch.
+- Pin the tray open, or drag its header to move it; the position is remembered.
+- Per-camera motion toggle and Device Settings pages (motion, video, audio, privacy, zones) for Blink cameras.
+- Sync Module page with firmware, Wi-Fi signal and storage used.
+- Clips play inside the app with pause, seek and replay, from Sync Module storage or the Blink cloud.
 - Optional local API and web UI on `http://127.0.0.1:7481/`.
-- Multiple simultaneous live streams.
-- Picture-in-Picture button and separate pop-out player windows, one per camera.
-- DPAPI-protected Blink session and settings stored per user.
-- Hidden console windows for the app and ffmpeg child processes.
+- DPAPI-protected sessions and settings stored per user.
 
 ## Requirements
 
 - Windows 10 or 11.
 - Go 1.26.2 or newer to build.
 - `ffmpeg` available in `PATH` for live audio/video decoding and fragmented MP4 packaging.
-- A Blink account. A Sync Module with local storage enabled is needed for Sync Module clips.
+- A Blink account and/or a Tapo camera with a Camera Account. A Sync Module with local storage enabled is needed for Sync Module clips.
 
 ## Build
 
 ```powershell
-go build -ldflags "-s -w -H=windowsgui" -o bin\BlinkView.exe .
+go build -ldflags "-s -w -H=windowsgui" -o bin\CameraView.exe .
 ```
 
 The checked-in `rsrc_windows_amd64.syso` supplies the executable icon and version resource.
@@ -31,10 +32,10 @@ The checked-in `rsrc_windows_amd64.syso` supplies the executable icon and versio
 ## Run
 
 ```powershell
-bin\BlinkView.exe
+bin\CameraView.exe
 ```
 
-Use the tray icon to open the flyout. `bin\BlinkView.exe -show` opens the panel on startup. Sign in from the login view.
+Use the tray icon to open the flyout. `bin\CameraView.exe -show` opens the panel on startup. Sign in from the login view.
 
 When the local API is enabled, open `http://127.0.0.1:7481/` in a browser. The API only listens on the loopback interface by default. Set a password in Settings if other local processes should not be able to use it.
 
