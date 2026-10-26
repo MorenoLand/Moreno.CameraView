@@ -1,0 +1,7 @@
+bin/
+build/
+SESSION*/
+*.exe
+AGENTS.md
+
+*_test.go
