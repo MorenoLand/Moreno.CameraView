@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"moreno/blinkview/blinkcloud"
+	"moreno/blinkview/tapocam"
 )
 
 type watch struct {
@@ -45,6 +46,14 @@ type watch struct {
 const livePreroll = 4 << 20
 
 func (l *live) play(ctx context.Context, w *watch, cam blinkcloud.Camera) {
+	l.playWith(ctx, w, func(c context.Context) error { return l.stream(c, w, cam) })
+}
+
+func (l *live) playTapo(ctx context.Context, w *watch, tc tapocam.Camera) {
+	l.playWith(ctx, w, func(c context.Context) error { return l.streamTapo(c, w, tc) })
+}
+
+func (l *live) playWith(ctx context.Context, w *watch, run func(context.Context) error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer l.watchDone(w)
@@ -53,7 +62,7 @@ func (l *live) play(ctx context.Context, w *watch, cam blinkcloud.Camera) {
 		if ctx.Err() != nil {
 			return
 		}
-		last = l.stream(ctx, w, cam)
+		last = run(ctx)
 		if last == nil || ctx.Err() != nil {
 			return
 		}
@@ -67,6 +76,18 @@ func (l *live) play(ctx context.Context, w *watch, cam blinkcloud.Camera) {
 		}
 	}
 	l.watchNote(w, "Error: "+last.Error())
+	l.mu.Lock()
+	if l.werr == nil {
+		l.werr = map[string]string{}
+	}
+	l.werr[w.id] = last.Error()
+	l.mu.Unlock()
+}
+
+func (l *live) WatchError(id string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.werr[id]
 }
 
 func (l *live) stream(ctx context.Context, w *watch, cam blinkcloud.Camera) error {
@@ -91,6 +112,63 @@ func (l *live) stream(ctx context.Context, w *watch, cam blinkcloud.Camera) erro
 	defer conn.Close()
 	go func() { <-ctx.Done(); conn.Close() }()
 	go keepLive(ctx, conn)
+	return l.pipe(ctx, w, func() { conn.Close() }, func(v io.Writer, a chan<- []byte) error { return readLive(conn, v, a, l, w) })
+}
+
+func (l *live) resetPreroll(w *watch) {
+	l.mu.Lock()
+	if l.watches[w.id] == w {
+		w.preroll = nil
+	}
+	l.mu.Unlock()
+}
+
+func (l *live) streamTapo(ctx context.Context, w *watch, tc tapocam.Camera) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	l.resetPreroll(w)
+	l.watchNote(w, "Connecting…")
+	cmd, errb, out, err := tapocam.Stream(ctx, tc)
+	if err != nil {
+		return err
+	}
+	defer cmd.Wait()
+	defer cmd.Process.Kill()
+	return l.pipe(ctx, w, func() { _ = cmd.Process.Kill() }, func(v io.Writer, a chan<- []byte) error {
+		buf := make([]byte, 188*16)
+		for {
+			if _, err := io.ReadFull(out, buf); err != nil {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				if msg := tapocam.LastLine(errb.String()); msg != "" && ctx.Err() == nil {
+					return errors.New(msg)
+				}
+				return err
+			}
+			chunk := append([]byte(nil), buf...)
+			l.broadcast(w, chunk)
+			if a != nil {
+				select {
+				case a <- chunk:
+				default:
+				}
+			}
+			if _, err := v.Write(chunk); err != nil {
+				return err
+			}
+		}
+	})
+}
+
+func lastLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndexByte(s, 10); i >= 0 {
+		s = strings.TrimSpace(s[i+1:])
+	}
+	return s
+}
+
+func (l *live) pipe(ctx context.Context, w *watch, closeSrc func(), read func(io.Writer, chan<- []byte) error) error {
 	cmd, stdin, stdout, errb, err := startFFmpeg(ctx)
 	if err != nil {
 		return err
@@ -114,7 +192,7 @@ func (l *live) stream(ctx context.Context, w *watch, cam blinkcloud.Camera) erro
 	}
 	readErr := make(chan error, 1)
 	go func() {
-		readErr <- readLive(conn, stdin, audioCh, l, w)
+		readErr <- read(stdin, audioCh)
 		stdin.Close()
 	}()
 	got := false
@@ -122,7 +200,7 @@ func (l *live) stream(ctx context.Context, w *watch, cam blinkcloud.Camera) erro
 		got = true
 		l.watchFrame(w, img)
 	})
-	conn.Close()
+	closeSrc()
 	var rerr error
 	select {
 	case rerr = <-readErr:
@@ -291,7 +369,7 @@ var (
 
 func audioDevice() (*oto.Context, error) {
 	audioOnce.Do(func() {
-		ctx, ready, err := oto.NewContext(&oto.NewContextOptions{SampleRate: 48000, ChannelCount: 2, Format: oto.FormatSignedInt16LE, BufferSize: 120 * time.Millisecond, ApplicationName: "BlinkView"})
+		ctx, ready, err := oto.NewContext(&oto.NewContextOptions{SampleRate: 48000, ChannelCount: 2, Format: oto.FormatSignedInt16LE, BufferSize: 120 * time.Millisecond, ApplicationName: "CameraView"})
 		if err != nil {
 			audioError = err
 			return

@@ -197,7 +197,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			u, pw, ok := r.BasicAuth()
 			good := ok && subtle.ConstantTimeCompare([]byte(u), []byte(s.cfg.User)) == 1 && subtle.ConstantTimeCompare([]byte(store.Hash(s.cfg.Salt, pw)), []byte(s.cfg.Hash)) == 1
 			if !good {
-				w.Header().Set("WWW-Authenticate", `Basic realm="BlinkView"`)
+				w.Header().Set("WWW-Authenticate", `Basic realm="CameraView"`)
 				fail(w, http.StatusUnauthorized, "sign-in required")
 				return
 			}
@@ -223,7 +223,7 @@ func (s *Server) camera(w http.ResponseWriter, id string) (model.Camera, bool) {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"name": "BlinkView", "version": "v1"})
+		writeJSON(w, http.StatusOK, map[string]any{"name": "CameraView", "version": "v1"})
 	})
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) {
 		st := State{LoggedIn: s.c.LoggedIn(), HomeName: s.c.HomeName(), Muted: s.c.Muted(), ClipStatus: s.c.ClipStatus()}

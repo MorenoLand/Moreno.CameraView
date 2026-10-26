@@ -29,6 +29,10 @@ const (
 	viewClips
 	viewSettings
 	viewAPI
+	viewAccount
+	viewDevices
+	viewNotify
+	viewSources
 	semi = font.SemiBold
 	reg  = font.Normal
 )
@@ -53,6 +57,26 @@ type Backend interface {
 	Watch(id string)
 	StopWatch()
 	WatchState() (id string, img image.Image, rev int, note string, active bool)
+	LoadAccount()
+	TapoList() []model.TapoCam
+	TapoAdd(name, host, user, pass string) error
+	TapoRemove(id string)
+	TapoFind()
+	TapoFound() ([]model.Found, bool)
+	TapoError(id string) string
+	BlinkSignedIn() bool
+	Profile() model.Profile
+	Notifications() map[string]bool
+	SetNotification(key string, on bool)
+	DeviceConfig(id string) model.DeviceConfig
+	DeviceRaw(id string) map[string]any
+	SyncInfo() model.SyncInfo
+	ClipPlay(id string, sec float64)
+	WatchError(id string) string
+	ClipPos(id string) (pos, dur float64)
+	SetDeviceConfig(id, key string, v any)
+	SettingsNote() string
+	OpenHelp()
 	Armed() (armed, known bool)
 	SetArmed(on bool)
 	SyncStatus() (name, status string, warn bool)
@@ -73,6 +97,14 @@ type Backend interface {
 type Panel struct {
 	Static            bool
 	MaxH, WantH       float32
+	TogglePin         func(id string)
+	DragBegin         func()
+	DragMove          func()
+	DragEnd           func()
+	DragReset         func()
+	dragging          bool
+	dragClick         time.Time
+	IsPinned          func(id string) bool
 	be                Backend
 	th                *material.Theme
 	gtx               layout.Context
@@ -101,6 +133,21 @@ type Panel struct {
 	watchActive       bool
 	muted             bool
 	settings          store.Settings
+	thumbSeen         map[string]bool
+	edName, edHost    widget.Editor
+	edTUser, edTPass  widget.Editor
+	srcMsg            string
+	sheet, sheetID    string
+	clipID            string
+	clipState         int
+	clipLast          image.Image
+	clipLastRev       int
+	clipPausePos      float64
+	clipSeek          float64
+	clipSeeking       bool
+	sliding           map[string]int
+	zones             uint32
+	zonesInit         bool
 }
 
 type thumbOp struct {
@@ -161,15 +208,21 @@ func (p *Panel) Layout(gtx layout.Context) layout.Dimensions {
 	}
 	if p.view != p.prevView {
 		p.prevView, p.scroll = p.view, 0
+		if a := p.an["vt"]; a != nil && !p.Static {
+			*a = 0
+		}
 	}
 	p.background(cams)
 	p.introT = p.ease("intro", 1, 4)
 	st := op.Offset(image.Pt(0, p.px((1-p.introT)*10))).Push(p.ops)
 	fade := paint.PushOpacity(p.ops, p.introT)
-	if !p.be.LoggedIn() {
+	if !p.be.LoggedIn() && p.view != viewSources {
 		p.loginView()
 	} else {
 		p.header(cams)
+		vt := p.ease("vt", 1, 11)
+		sv := op.Offset(image.Pt(0, p.px((1-vt)*8))).Push(p.ops)
+		vf := paint.PushOpacity(p.ops, 0.2+0.8*vt)
 		switch p.view {
 		case viewCamera:
 			p.cameraView(cams)
@@ -179,9 +232,40 @@ func (p *Panel) Layout(gtx layout.Context) layout.Dimensions {
 			p.settingsView()
 		case viewAPI:
 			p.apiView()
+		case viewAccount:
+			p.accountView()
+		case viewDevices:
+			p.devicesView(cams)
+		case viewNotify:
+			p.notifyView()
+		case viewSources:
+			p.sourcesView()
+		case viewCamSettings:
+			p.camSettingsView(cams)
+		case viewCamGeneral:
+			p.camGeneralView(cams)
+		case viewCamMotion:
+			p.camMotionView(cams)
+		case viewCamVideo:
+			p.camVideoView(cams)
+		case viewCamAudio:
+			p.camAudioView(cams)
+		case viewCamPrivacy:
+			p.camPrivacyView(cams)
+		case viewCamHelp:
+			p.camHelpView()
+		case viewZones:
+			p.zonesView(cams)
+		case viewSync:
+			p.syncView()
+		case viewClipPlay:
+			p.clipPlayView()
 		default:
 			p.homeView(cams)
 		}
+		vf.Pop()
+		sv.Pop()
+		p.camSheet(cams)
 	}
 	fade.Pop()
 	st.Pop()
@@ -236,30 +320,30 @@ func (p *Panel) button(tag string, x, y, w, h float32, label string, primary boo
 }
 
 func (p *Panel) toggleRow(y float32, label string, on bool, f func()) {
-	p.glass(16, y, p.w-32, 50, 16)
+	ht := p.hoverRow("trow:"+label, 16, y, p.w-32, 50, 16)
 	p.text(32, y+14, label, 14, cWhite, reg)
 	t := p.ease("tg:"+label, b2f(on), 14)
 	p.fillRR(p.w-76, y+12, 44, 26, 13, mix(rgb(52, 58, 86), cBlue, t))
 	p.disc(p.w-63+t*18, y+25, 10, cWhite)
-	if p.area("trow:"+label, 16, y, p.w-32, 50).Clicked {
+	if ht.Clicked {
 		f()
 	}
 }
 
 func (p *Panel) navRow(y float32, label, value string, f func()) {
-	p.glass(16, y, p.w-32, 50, 16)
+	ht := p.hoverRow("nav:"+label, 16, y, p.w-32, 50, 16)
 	p.text(32, y+14, label, 14, cWhite, reg)
 	p.strokePoly([]f32.Point{p.pt(p.w-40, y+19), p.pt(p.w-34, y+25), p.pt(p.w-40, y+31)}, 1.8, cDim, false)
 	p.textR(p.w-52, y+15, value, 12.5, cDim, reg)
-	if p.area("nav:"+label, 16, y, p.w-32, 50).Clicked {
+	if ht.Clicked {
 		f()
 	}
 }
 
 func (p *Panel) buttonRow(y float32, label string, c color.NRGBA, f func()) {
-	p.glass(16, y, p.w-32, 50, 16)
+	ht := p.hoverRow("brow:"+label, 16, y, p.w-32, 50, 16)
 	p.text(32, y+14, label, 14, c, reg)
-	if p.area("brow:"+label, 16, y, p.w-32, 50).Clicked {
+	if ht.Clicked {
 		f()
 	}
 }
@@ -273,10 +357,12 @@ func (p *Panel) header(cams []model.Camera) {
 		p.icoHome(34, 34, rgb(220, 224, 240))
 	}
 	if p.area("home", 16, 16, 36, 36).Clicked {
-		if p.view == viewCamera {
+		if p.view == viewCamera || p.view == viewClipPlay {
 			p.be.StopWatch()
 		}
-		if p.view == viewAPI {
+		if to, ok := p.backTarget(); ok {
+			p.view = to
+		} else if p.view == viewAPI || p.view == viewAccount || p.view == viewDevices || p.view == viewNotify || p.view == viewSources {
 			p.view = viewSettings
 		} else {
 			p.view, p.sel = viewHome, ""
@@ -284,9 +370,9 @@ func (p *Panel) header(cams []model.Camera) {
 	}
 	name := p.be.HomeName()
 	if name == "" {
-		name = "My Blink"
+		name = "My Cameras"
 	}
-	p.textFit(62, 14, 178, name, 16, cWhite, semi)
+	p.textFit(62, 14, 142, name, 16, cWhite, semi)
 	on, off := 0, 0
 	for _, c := range cams {
 		if c.Online {
@@ -295,7 +381,7 @@ func (p *Panel) header(cams []model.Camera) {
 			off++
 		}
 	}
-	sub := fmt.Sprintf("%d of %d cameras online", on, len(cams))
+	sub := fmt.Sprintf("%d of %d online", on, len(cams))
 	if len(cams) == 0 {
 		sub = "No cameras"
 	}
@@ -303,12 +389,41 @@ func (p *Panel) header(cams []model.Camera) {
 		sub += fmt.Sprintf(" · %d offline", off)
 	}
 	p.disc(67, 46, 3, map[bool]color.NRGBA{true: cBlink, false: cFaint}[on > 0])
-	p.textFit(76, 36, 178, sub, 12, cDim, reg)
+	p.textFit(76, 36, 142, sub, 12, cDim, reg)
+	if p.DragBegin != nil {
+		d := p.area("hdrdrag", 60, 6, 156, 52)
+		if d.Down && !p.dragging {
+			p.dragging = true
+			p.DragBegin()
+		}
+		if p.dragging && d.Down {
+			p.DragMove()
+		}
+		if p.dragging && !d.Down {
+			p.dragging = false
+			p.DragEnd()
+		}
+		if d.Clicked {
+			if p.gtx.Now.Sub(p.dragClick) < 350*time.Millisecond {
+				p.DragReset()
+			}
+			p.dragClick = p.gtx.Now
+		}
+	}
+	pt := p.ease("hdr:pin", b2f(p.settings.PinTray), 14)
+	p.fillRR(218, 16, 36, 36, 12, mix(rgba(255, 255, 255, 6), rgba(90, 150, 255, 46), pt))
+	p.icoPin(236, 34, mix(rgb(210, 214, 232), cWhite, pt), p.settings.PinTray)
+	if p.area("trypin", 218, 16, 36, 36).Clicked {
+		s := p.be.Settings()
+		s.PinTray = !s.PinTray
+		p.be.SaveSettings(s)
+		p.settings = s
+	}
 	cs := p.ease("hdr:clips", b2f(p.view == viewClips), 14)
 	p.fillRR(262, 16, 36, 36, 12, mix(rgba(255, 255, 255, 6), rgba(90, 150, 255, 38), cs))
 	p.icoFilm(280, 34, mix(rgb(210, 214, 232), cWhite, cs))
 	if p.area("clips", 262, 16, 36, 36).Clicked {
-		if p.view == viewCamera {
+		if p.view == viewCamera || p.view == viewClipPlay {
 			p.be.StopWatch()
 		}
 		if p.view == viewClips {
@@ -317,14 +432,14 @@ func (p *Panel) header(cams []model.Camera) {
 			p.view, p.sel = viewClips, ""
 		}
 	}
-	gs := p.ease("hdr:gear", b2f(p.view == viewSettings || p.view == viewAPI), 14)
+	gs := p.ease("hdr:gear", b2f(p.inSettings()), 14)
 	p.fillRR(306, 16, 36, 36, 18, mix(rgba(255, 255, 255, 6), rgba(90, 150, 255, 40), gs))
 	p.icoSliders(324, 34, mix(rgb(210, 214, 232), cWhite, gs))
 	if p.area("gear", 306, 16, 36, 36).Clicked {
-		if p.view == viewCamera {
+		if p.view == viewCamera || p.view == viewClipPlay {
 			p.be.StopWatch()
 		}
-		if p.view == viewSettings || p.view == viewAPI {
+		if p.inSettings() {
 			p.view = viewHome
 		} else {
 			p.view, p.sel = viewSettings, ""
@@ -357,11 +472,15 @@ func (p *Panel) syncBar(y float32) float32 {
 		tx += 22
 	}
 	p.text(tx, y+13, status, 12, map[bool]color.NRGBA{true: cRed, false: cDim}[warn], reg)
+	if p.area("syncbar", 16, y, p.w-32, 44).Clicked {
+		p.ShowSync()
+	}
 	return y + 56
 }
 
 func (p *Panel) homeView(cams []model.Camera) {
 	top := float32(76)
+	p.be.LoadAccount()
 	y0 := p.syncBar(top)
 	gap := float32(14)
 	cw := p.w - 32
@@ -439,7 +558,20 @@ func (p *Panel) camTile(c model.Camera, x, y, w, h float32, i int) {
 	defer p.pressScale("cam:"+c.ID, x, y, w, h, body.Down)()
 	p.fillRR(x, y, w, h, 18, rgb(14, 18, 32))
 	if o, ok := p.thumbOp(c.ID); ok {
+		if !p.thumbSeen[c.ID] {
+			if p.thumbSeen == nil {
+				p.thumbSeen = map[string]bool{}
+			}
+			p.thumbSeen[c.ID] = true
+			if a := p.an["tf:"+c.ID]; a != nil && !p.Static {
+				*a = 0
+			} else if !p.Static {
+				p.an["tf:"+c.ID] = new(float32)
+			}
+		}
+		fp := paint.PushOpacity(p.ops, p.ease("tf:"+c.ID, 1, 5))
 		p.cover(o, x, y, w, h, 18)
+		fp.Pop()
 	}
 	p.gradRR(x, y, w, h, 18, rgba(0, 0, 0, 62), rgba(0, 0, 0, 10), false)
 	p.gradRR(x, y+h-86, w, 86, 18, rgba(0, 0, 0, 0), rgba(0, 0, 0, 175), false)
@@ -472,12 +604,13 @@ func (p *Panel) camTile(c model.Camera, x, y, w, h float32, i int) {
 		p.text(x+22, y+h-31, a, 11.5, cWhite, reg)
 	}
 	if c.Battery != "" {
-		p.textR(x+w-16, y+h-31, c.Battery, 11.5, cDim, reg)
+		p.text(x+22+p.textW(ago(c.Seen), 11.5, reg)+14, y+h-31, c.Battery, 11.5, cDim, reg)
 	}
-	if body.Clicked {
+	if body.Clicked && !(body.X > x+w-150 && body.Y > y+h-52) {
 		p.view, p.sel, p.scroll = viewCamera, c.ID, 0
 		p.be.Watch(c.ID)
 	}
+	p.camPill(c, x, y, w, h)
 }
 
 func (p *Panel) pressScale(tag string, x, y, w, h float32, down bool) func() {
@@ -533,6 +666,20 @@ func (p *Panel) cameraView(cams []model.Camera) {
 			p.be.SetMuted(!p.muted)
 		}
 	}
+	if p.TogglePin != nil && c.Online {
+		pinned := p.IsPinned != nil && p.IsPinned(c.ID)
+		pk := p.ease("camPin", b2f(pinned), 14)
+		bx := x + w - 50
+		if watching && p.watchImg != nil {
+			bx = x + w - 108
+		}
+		p.fillRR(bx, y+12, 38, 30, 12, mix(rgba(0, 0, 0, 145), rgba(60, 120, 240, 220), pk))
+		p.icoPin(bx+19, y+27, cWhite, pinned)
+		if p.area("campin", bx, y+12, 38, 30).Clicked {
+			p.TogglePin(c.ID)
+		}
+	}
+	p.camPill(c, x, y, w, h)
 	y += h + 14
 	p.text(x, y, c.Name, 20, cWhite, semi)
 	sub := map[bool]string{true: "Online", false: "Offline"}[c.Online]
@@ -624,7 +771,9 @@ func (p *Panel) clipsView() {
 			p.fillRR(x+w-14-bw, y+33, bw, 22, 11, rgba(255, 255, 255, 12))
 			p.textC(x+w-14-bw/2, y+36, c.Kind, 11.5, cWhite, reg)
 			if ht.Clicked {
-				p.be.OpenClip(c.ID)
+				p.clipID, p.view = c.ID, viewClipPlay
+				p.clipState, p.clipLast = clipPlaying, nil
+				p.be.ClipPlay(c.ID, 0)
 			}
 		}
 		y += 70
@@ -635,34 +784,6 @@ func sameDay(a, b time.Time) bool {
 	ay, am, ad := a.Date()
 	by, bm, bd := b.Date()
 	return ay == by && am == bm && ad == bd
-}
-
-func (p *Panel) settingsView() {
-	top := float32(78)
-	p.text(16, top, "Settings", 18, cWhite, semi)
-	y := top + 40
-	s := p.settings
-	api := map[bool]string{true: fmt.Sprintf("On, port %d", s.APIPort), false: "Off"}[s.LocalAPI]
-	p.navRow(y, "Local API", api, func() { p.view, p.apiInit = viewAPI, false })
-	web := "Off"
-	if p.be.WebURL() != "" {
-		web = "Open"
-	}
-	p.navRow(y+54, "Web panel", web, func() {
-		if p.be.WebURL() != "" {
-			p.be.OpenWeb()
-		} else {
-			p.view, p.apiInit = viewAPI, false
-		}
-	})
-	p.buttonRow(y+108, "Refresh cameras", cWhite, p.be.Refresh)
-	p.buttonRow(y+162, "Sign out", rgb(255, 150, 130), func() {
-		p.be.Signout()
-		p.view, p.sel = viewHome, ""
-	})
-	p.buttonRow(y+216, "Quit", cWhite, p.be.Quit)
-	end := p.para(18, y+286, p.w-36, "BlinkView stays in the tray. Click the tray icon to open or hide this panel.", 11.5, cFaint, reg, 3)
-	p.WantH = min(p.MaxH, max(y+282, end+16))
 }
 
 func (p *Panel) apiView() {
@@ -777,14 +898,17 @@ func (p *Panel) loginView() {
 	w := min(368, p.w-40)
 	x, y := (p.w-w)/2, max(80, (p.h-310)/2)
 	p.glow(p.w/2, y+150, 270, cBlink, 0.12)
-	p.glass(x, y, w, 300, 22)
+	p.glass(x, y, w, 330, 22)
 	p.disc(x+w/2, y+46, 24, cBlink)
 	p.textC(x+w/2, y+29, "b", 28, rgb(6, 30, 22), semi)
-	p.textC(x+w/2, y+90, "Sign in to your Blink account", 15, cWhite, semi)
+	p.textC(x+w/2, y+90, "Sign in to a camera account", 15, cWhite, semi)
 	p.textC(x+w/2, y+116, "Blink's own sign-in page opens in your browser.", 12, cDim, reg)
 	if !waiting {
 		if p.button("login", x+24, y+156, w-48, 48, "Sign in with Blink", true) {
 			p.be.StartLogin()
+		}
+		if p.button("tapo", x+24, y+212, w-48, 44, "Add a Tapo camera", false) {
+			p.view = viewSources
 		}
 	} else {
 		p.textC(x+w/2, y+158, "Waiting for you to finish in the browser…", 12.5, cWhite, reg)
@@ -794,8 +918,8 @@ func (p *Panel) loginView() {
 		p.animating = true
 	}
 	col := map[bool]color.NRGBA{true: cRed, false: cDim}[strings.HasPrefix(status, "Error")]
-	p.para(x+20, y+252, w-40, status, 11.5, col, reg, 3)
-	p.WantH = min(p.MaxH, 410)
+	p.para(x+20, y+272, w-40, status, 11.5, col, reg, 3)
+	p.WantH = min(p.MaxH, 440)
 }
 
 func (p *Panel) para(x, y, maxW float32, s string, sp float32, c color.NRGBA, w font.Weight, maxLines int) float32 {

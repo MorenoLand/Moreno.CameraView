@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>BlinkView</title>
+<title>CameraView</title>
 <style>
 :root{--green:#00c880;--green2:#25e6a0;--dim:#91a3a1;--red:#ff7b6e;--line:rgba(255,255,255,.12)}
 *{box-sizing:border-box}
@@ -107,13 +107,13 @@ async function start() {
   show('Starting live view…')
   try {
     let st = await api('/api/state')
-    if (!st.loggedIn) { fail('Sign in from the BlinkView tray app first.'); return }
+    if (!st.loggedIn) { fail('Sign in from the CameraView tray app first.'); return }
     const c = (st.cameras || []).find(x => x.id === cam)
     if (!c) { fail('Camera not found.'); return }
     if (!c.online) { fail('This camera is offline.'); return }
     title.textContent = c.name
     nameEl.textContent = c.name
-    document.title = c.name + ' — BlinkView'
+    document.title = c.name + ' — CameraView'
     let w = watchOf(st, cam)
     if (!w || !w.live) {
       await api(`/api/cameras/${encodeURIComponent(cam)}/wake`, { method: 'POST' })

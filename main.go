@@ -24,7 +24,7 @@ const panelW = 408
 
 func main() {
 	shot := flag.String("shot", "", "render demo screens to this folder and exit")
-	show := flag.Bool("show", false, "open the panel when BlinkView starts")
+	show := flag.Bool("show", false, "open the panel when CameraView starts")
 	flag.Parse()
 	if len(os.Args) > 1 && forwardCallback(os.Args[1]) {
 		return
@@ -91,7 +91,7 @@ func main() {
 		sig := int64(on)<<32 | int64(len(cams))
 		if sig != lastCameras.Swap(sig) {
 			systray.SetIcon(flyout.Icon(on > 0))
-			systray.SetTooltip(fmt.Sprintf("Blink cameras: %d of %d online", on, len(cams)))
+			systray.SetTooltip(fmt.Sprintf("Cameras: %d of %d online", on, len(cams)))
 		}
 	}
 	hide := func() {
@@ -131,11 +131,12 @@ func main() {
 		open()
 	}
 	lv = newLive(invalidate)
+	pins := newPinWins(lv)
 	go func() {
 		runtime.LockOSThread()
 		systray.Run(func() {
 			systray.SetIcon(flyout.Icon(false))
-			systray.SetTooltip("Blink cameras")
+			systray.SetTooltip("CameraView")
 			systray.SetOnClick(func(systray.IMenu) { go toggle() })
 			systray.SetOnRClick(func(m systray.IMenu) { _ = m.ShowMenu() })
 			systray.AddMenuItem("Open", "").Click(func() { go open() })
@@ -144,6 +145,7 @@ func main() {
 			systray.AddSeparator()
 			systray.AddMenuItem("Quit", "").Click(func() { lv.Quit() })
 			trayReady.Store(true)
+			pins.Restore()
 			invalidate()
 			go func() {
 				time.Sleep(800 * time.Millisecond)
@@ -161,9 +163,54 @@ func main() {
 		}
 		pnl := panel.New(lv)
 		pnl.MaxH = h
+		pnl.TogglePin, pnl.IsPinned = pins.Toggle, pins.Pinned
+		var org [4]int32
+		moveWake := make(chan struct{}, 1)
+		go func() {
+			for range moveWake {
+				if h := hwnd.Load(); h != 0 {
+					flyout.DragTo(h, org[0], org[1], org[2], org[3])
+				}
+			}
+		}()
+		pnl.DragBegin = func() {
+			if h := hwnd.Load(); h != 0 {
+				org[0], org[1], org[2], org[3] = flyout.DragOrigin(h)
+			}
+		}
+		pnl.DragMove = func() {
+			select {
+			case moveWake <- struct{}{}:
+			default:
+			}
+		}
+		pnl.DragEnd = func() {
+			h := hwnd.Load()
+			if h == 0 {
+				return
+			}
+			x, y := flyout.Pos(h)
+			flyout.SetFree(true, x, y)
+			s := lv.Settings()
+			s.TrayMoved, s.TrayX, s.TrayY = true, int(x), int(y)
+			lv.SaveSettings(s)
+		}
+		pnl.DragReset = func() {
+			flyout.SetFree(false, 0, 0)
+			s := lv.Settings()
+			s.TrayMoved = false
+			lv.SaveSettings(s)
+			if h := hwnd.Load(); h != 0 {
+				x, y := flyout.Anchor(h)
+				go flyout.Reposition(h, x, y)
+			}
+		}
+		if s := lv.Settings(); s.TrayMoved {
+			flyout.SetFree(true, int32(s.TrayX), int32(s.TrayY))
+		}
 		hNow.Store(int32(h * 100))
 		w := new(app.Window)
-		w.Option(app.Title("Blink cameras"), app.Size(unit.Dp(panelW), unit.Dp(h)), app.MinSize(unit.Dp(panelW), unit.Dp(200)), app.MaxSize(unit.Dp(panelW), unit.Dp(h)), app.Decorated(false))
+		w.Option(app.Title("CameraView"), app.Size(unit.Dp(panelW), unit.Dp(h)), app.MinSize(unit.Dp(panelW), unit.Dp(200)), app.MaxSize(unit.Dp(panelW), unit.Dp(h)), app.Decorated(false))
 		wp.Store(w)
 		var ops op.Ops
 		last := time.Now()
@@ -177,7 +224,7 @@ func main() {
 			case app.ConfigEvent:
 				if e.Config.Focused {
 					focused.Store(true)
-				} else if focused.Swap(false) && time.Since(time.Unix(0, shownAt.Load())) > 300*time.Millisecond {
+				} else if focused.Swap(false) && !lv.Settings().PinTray && time.Since(time.Unix(0, shownAt.Load())) > 300*time.Millisecond {
 					if h := hwnd.Load(); h != 0 && flyout.Visible(h) {
 						blurAt.Store(time.Now().UnixNano())
 						go hide()

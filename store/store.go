@@ -13,19 +13,25 @@ import (
 	"golang.org/x/sys/windows"
 
 	"moreno/blinkview/blinkcloud"
+	"moreno/blinkview/tapocam"
 )
 
 const DefaultAPIPort = 7481
 
 type Settings struct {
-	LocalAPI bool     `json:"local_api"`
-	APIPort  int      `json:"api_port"`
-	APIAllow []string `json:"api_allow"`
-	APIAuth  bool     `json:"api_auth"`
-	APIUser  string   `json:"api_user"`
-	APISalt  string   `json:"api_salt"`
-	APIHash  string   `json:"api_hash"`
-	Muted    bool     `json:"muted"`
+	LocalAPI  bool     `json:"local_api"`
+	APIPort   int      `json:"api_port"`
+	APIAllow  []string `json:"api_allow"`
+	APIAuth   bool     `json:"api_auth"`
+	APIUser   string   `json:"api_user"`
+	APISalt   string   `json:"api_salt"`
+	APIHash   string   `json:"api_hash"`
+	Muted     bool     `json:"muted"`
+	PinTray   bool     `json:"pin_tray"`
+	TrayMoved bool     `json:"tray_moved"`
+	TrayX     int      `json:"tray_x"`
+	TrayY     int      `json:"tray_y"`
+	Pinned    []string `json:"pinned"`
 }
 
 func Dir() string {
@@ -96,3 +102,20 @@ func SaveSession(s blinkcloud.Session) {
 }
 
 func ForgetSession() { _ = os.Remove(filepath.Join(Dir(), "session.bin")) }
+
+func LoadTapo() []tapocam.Camera {
+	var out []tapocam.Camera
+	if b, err := os.ReadFile(filepath.Join(Dir(), "tapo.bin")); err == nil {
+		if plain, err := dpapi(b, false); err == nil {
+			_ = json.Unmarshal(plain, &out)
+		}
+	}
+	return out
+}
+
+func SaveTapo(c []tapocam.Camera) {
+	b, _ := json.Marshal(c)
+	if enc, err := dpapi(b, true); err == nil {
+		_ = os.WriteFile(filepath.Join(Dir(), "tapo.bin"), enc, 0o600)
+	}
+}

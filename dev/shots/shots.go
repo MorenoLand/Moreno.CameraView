@@ -76,6 +76,40 @@ func (demo) SetMuted(bool)                      {}
 func (demo) Refresh()                           {}
 func (demo) Signout()                           {}
 func (demo) Quit()                              {}
+func (demo) LoadAccount()                       {}
+func (demo) TapoList() []model.TapoCam {
+	return []model.TapoCam{{ID: "tapo:192.168.0.40", Name: "Office", Host: "192.168.0.40", User: "you"}}
+}
+func (demo) TapoAdd(string, string, string, string) error { return nil }
+func (demo) TapoRemove(string)                            {}
+func (demo) TapoFind()                                    {}
+func (demo) TapoFound() ([]model.Found, bool) {
+	return []model.Found{{Host: "192.168.0.41", Model: "Tapo C210"}}, false
+}
+func (demo) TapoError(string) string { return "" }
+func (demo) BlinkSignedIn() bool     { return true }
+func (demo) Profile() model.Profile {
+	return model.Profile{Email: "you@example.com", Name: "You", Phone: "+1******0993", Country: "us", TimeZone: "America/New_York"}
+}
+func (demo) Notifications() map[string]bool {
+	return map[string]bool{"motion": true, "cv_motion": true, "doorbell": true, "camera_offline": true, "sync_module_offline": true, "low_battery": true, "battery_dead": false, "wifi": false, "local_storage": true, "general": false}
+}
+func (demo) SetNotification(string, bool) {}
+func (demo) DeviceConfig(id string) model.DeviceConfig {
+	return model.DeviceConfig{Loaded: true, Motion: id != "b", Audio: true, HasAudio: true, LED: true, HasLED: id != "c", Sensitivity: 8, ClipLen: 30, ClipMax: 30, Quality: "best", Firmware: "11.5.2"}
+}
+func (demo) DeviceRaw(string) map[string]any {
+	return map[string]any{"name": "Backyard", "fw_version": "9.105", "wifi": 3.0, "wifi_rssi": -67.0, "led_enabled": true, "enabled": true, "motion_sensitivity": 9.0, "motion_regions": 33554431.0, "retrigger_time": 10.0, "early_notification": true, "early_notification_compatible": true, "clip_length": 30.0, "clip_length_max": 30.0, "video_quality": "best", "early_termination": true, "early_termination_supported": true, "flip_video": false, "flip_video_compatible": true, "illuminator_enable": "auto", "illuminator_intensity": 7.0, "auto_update_thumbnail_enabled": false, "volume_control": 7.0, "chime_volume": 6.0, "chime_compatible": true, "video_recording_enable": true, "video_recording_optional": true, "record_audio_enable": true}
+}
+func (demo) ClipPlay(string, float64)          {}
+func (demo) WatchError(string) string          { return "" }
+func (demo) ClipPos(string) (float64, float64) { return 12, 30 }
+func (demo) SyncInfo() model.SyncInfo {
+	return model.SyncInfo{Name: "Sync Module", Status: "online", Firmware: "4.5.41", Wifi: 5, StorageOn: true, StorageKnown: true, StorageUsed: 11, StorageState: "active", BackupOn: true, BackupResult: "success", LastBackup: time.Now().Add(-9 * time.Hour)}
+}
+func (demo) SetDeviceConfig(string, string, any) {}
+func (demo) SettingsNote() string                { return "" }
+func (demo) OpenHelp()                           {}
 func (demo) Settings() store.Settings {
 	return store.Settings{LocalAPI: true, APIPort: store.DefaultAPIPort}
 }
@@ -109,6 +143,7 @@ func Run(dir string) {
 	w, h := int(408*s), int(720*s)
 	cur := panel.New(demo{})
 	cur.Static = true
+	cur.TogglePin = func(string) {}
 	for _, v := range []struct {
 		name  string
 		setup func()
@@ -117,6 +152,17 @@ func Run(dir string) {
 		{"camera", func() { cur.ShowCamera("a") }},
 		{"clips", func() { cur.ShowClips() }},
 		{"settings", func() { cur.ShowSettings() }},
+		{"account", func() { cur.ShowAccount() }},
+		{"sources", func() { cur.ShowSources() }},
+		{"devices", func() { cur.ShowDevices() }},
+		{"camset", func() { cur.ShowCamSettings("a") }},
+		{"sync", func() { cur.ShowSync() }},
+		{"clipplay", func() { cur.ShowClipPlayer("1") }},
+		{"motion", func() { cur.ShowCamSettings("a"); cur.ShowView(102) }},
+		{"video", func() { cur.ShowView(103) }},
+		{"zones", func() { cur.ShowView(107) }},
+		{"sheet", func() { cur.ShowView(0); cur.OpenSheet("a") }},
+		{"notify", func() { cur.ShowNotify() }},
 		{"api", func() { cur.ShowAPI(false) }},
 		{"login", func() { cur = panel.New(login{}); cur.Static = true }},
 		{"waiting", func() { cur = panel.New(login{wait: true}); cur.Static = true }},

@@ -54,6 +54,7 @@ const (
 	wsExApp       = 0x40000
 	swHide        = 0
 	swpNoSize     = 0x1
+	swpNoMove     = 0x2
 	swpNoZOrder   = 0x4
 	swpNoActivate = 0x10
 	swpShow       = 0x40
@@ -179,6 +180,9 @@ func Show(hwnd uintptr) {
 	var wr rect
 	pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))
 	x, y := Target(wr.R-wr.L, wr.B-wr.T)
+	if free.Load() {
+		x, y = clampToScreen(freeX.Load(), freeY.Load(), wr.R-wr.L, wr.B-wr.T)
+	}
 	pSetWindowPos.Call(hwnd, ^uintptr(0), uintptr(x), uintptr(y), 0, 0, swpNoSize|swpShow)
 	pSetForeground.Call(hwnd)
 }
@@ -253,6 +257,10 @@ func SetHeight(hwnd uintptr, hpx int32) {
 	y := mi.Work.B - hpx - margin
 	if mi.Work.T > mi.Monitor.T {
 		y = mi.Work.T + margin
+	}
+	if free.Load() {
+		y = min(wr.T, mi.Work.B-hpx-margin)
+		y = max(y, mi.Work.T)
 	}
 	pSetWindowPos.Call(hwnd, ^uintptr(0), uintptr(wr.L), uintptr(y), uintptr(wr.R-wr.L), uintptr(hpx), swpNoActivate|swpAsync)
 }

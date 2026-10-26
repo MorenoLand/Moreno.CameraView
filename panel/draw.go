@@ -354,6 +354,14 @@ func (p *Panel) icoFilm(cx, cy float32, c color.NRGBA) {
 	}
 }
 
+func (p *Panel) icoPin(cx, cy float32, c color.NRGBA, fill bool) {
+	p.strokePoly([]f32.Point{p.pt(cx-4, cy-9), p.pt(cx+4, cy-9), p.pt(cx+3, cy-1), p.pt(cx+6, cy+2), p.pt(cx-6, cy+2), p.pt(cx-3, cy-1)}, 1.6, c, true)
+	if fill {
+		p.fillPoly([]f32.Point{p.pt(cx-4, cy-9), p.pt(cx+4, cy-9), p.pt(cx+3, cy-1), p.pt(cx+6, cy+2), p.pt(cx-6, cy+2), p.pt(cx-3, cy-1)}, c)
+	}
+	p.line(cx, cy+2, cx, cy+9, 1.6, c)
+}
+
 func (p *Panel) icoMoon(cx, cy float32, c color.NRGBA) {
 	p.strokePoly(p.arc(float64(cx), float64(cy), 8, 0.55, 2*math.Pi-0.55), 1.6, c, false)
 	p.strokePoly(p.arc(float64(cx)+3.5, float64(cy)-1.5, 6.2, 0.9, 2*math.Pi-1.7), 1.6, c, false)

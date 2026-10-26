@@ -27,6 +27,8 @@ type Sync struct {
 	Status            string
 	Storage           string
 	Full              bool
+	Firmware          string
+	Wifi              int
 }
 
 type Home struct {
@@ -90,7 +92,8 @@ func (c *Client) Home() (*Home, error) {
 		h.Networks = append(h.Networks, Network{ID: str(n["id"]), Name: str(n["name"]), Armed: flag(n["armed"])})
 	}
 	for _, s := range list(m, "sync_modules") {
-		sy := Sync{ID: str(s["id"]), Name: str(s["name"]), Network: str(s["network_id"]), Status: str(s["status"])}
+		wifi, _ := s["wifi_strength"].(float64)
+		sy := Sync{ID: str(s["id"]), Name: str(s["name"]), Network: str(s["network_id"]), Status: str(s["status"]), Firmware: str(s["fw_version"]), Wifi: int(wifi)}
 		st := strings.ToLower(str(s["local_storage_status"]))
 		sy.Storage, sy.Full = st, strings.Contains(st, "full")
 		h.Syncs = append(h.Syncs, sy)

@@ -112,7 +112,7 @@ function camCard(c) {
 
 function homeView() {
   const st = S.state || {}
-  if (!st.loggedIn) return `<div class="empty"><div class="big">${I.cam}</div><b>Sign in from the tray app</b><span>Open BlinkView on this PC and sign in with your Blink account. Live video and controls will appear here.</span></div>`
+  if (!st.loggedIn) return `<div class="empty"><div class="big">${I.cam}</div><b>Sign in from the tray app or add a camera</b><span>Open BlinkView on this PC and sign in with your Blink account. Live video and controls will appear here.</span></div>`
   const list = cameras()
   const sync = st.sync ? `<div class="sync"><span class="dot ${st.sync.warn ? 'warn' : ''}"></span><b>${esc(st.sync.name)}</b><span class="${st.sync.warn ? 'warn' : ''}">${esc(st.sync.status)}</span></div>` : ''
   if (!list.length) return `${sync}<div class="empty"><div class="big">${I.cam}</div><b>No cameras yet</b><span>Cameras on this Blink account will show up here.</span></div>`

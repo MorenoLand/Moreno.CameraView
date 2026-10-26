@@ -27,6 +27,7 @@ import (
 	"moreno/blinkview/localapi"
 	"moreno/blinkview/model"
 	"moreno/blinkview/store"
+	"moreno/blinkview/tapocam"
 )
 
 type thumb struct {
@@ -37,6 +38,12 @@ type thumb struct {
 }
 
 type live struct {
+	werr       map[string]string
+	clipOff    map[string]float64
+	clipT0     map[string]time.Time
+	clipDur    map[string]float64
+	syncSt     blinkcloud.SyncStorage
+	syncStOK   bool
 	mu         sync.Mutex
 	cl         *blinkcloud.Client
 	home       *blinkcloud.Home
@@ -60,6 +67,17 @@ type live struct {
 	nextToken  uint64
 	api        *localapi.Server
 	apiStatus  string
+	prof       blinkcloud.Profile
+	notify     map[string]bool
+	cfgs       map[string]map[string]any
+	accAt      time.Time
+	setNote    string
+	tapos      []tapocam.Camera
+	tapoUp     map[string]bool
+	tapoErr    map[string]string
+	found      []tapocam.Found
+	finding    bool
+	tapoNote   string
 }
 
 func newLive(invalidate func()) *live {
@@ -67,6 +85,7 @@ func newLive(invalidate func()) *live {
 	l.cl = blinkcloud.New(store.LoadSession())
 	l.cl.OnSave = store.SaveSession
 	l.in = l.cl.HasRefresh()
+	l.tapos, l.tapoUp, l.tapoErr = store.LoadTapo(), map[string]bool{}, map[string]string{}
 	l.listen()
 	l.applyAPI()
 	go l.loop()
@@ -82,6 +101,7 @@ func (l *live) loop() {
 		if in {
 			l.refresh()
 		}
+		l.refreshTapo()
 		select {
 		case <-t.C:
 		case <-l.wake:
@@ -220,7 +240,7 @@ func localFrom(manifests []*blinkcloud.LocalManifest, since time.Time) []blinkcl
 func (l *live) LoggedIn() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.in
+	return l.in || len(l.tapos) > 0
 }
 
 func (l *live) LoginState() (string, bool) {
@@ -313,7 +333,7 @@ func (l *live) OpenClip(id string) {
 func (l *live) ClipFile(id string) (string, error) {
 	parts := strings.Split(id, ":")
 	if len(parts) != 4 || parts[0] != "local" {
-		return "", errors.New("clip is not available offline")
+		return l.cloudClipFile(id)
 	}
 	manifestID, clipID := parts[1], parts[2]
 	ts, _ := strconv.ParseInt(parts[3], 10, 64)
@@ -437,12 +457,14 @@ func (l *live) HomeName() string {
 func (l *live) Cameras() []model.Camera {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.home == nil {
-		return nil
+	out := make([]model.Camera, 0, len(l.tapos)+4)
+	if l.home != nil {
+		for _, c := range l.home.Cameras {
+			out = append(out, model.Camera{Provider: "blink", ID: c.ID, Name: c.Name, Kind: c.Kind, Online: c.Online, Enabled: c.Enabled, Battery: c.Battery, Seen: c.Updated})
+		}
 	}
-	out := make([]model.Camera, 0, len(l.home.Cameras))
-	for _, c := range l.home.Cameras {
-		out = append(out, model.Camera{ID: c.ID, Name: c.Name, Kind: c.Kind, Online: c.Online, Enabled: c.Enabled, Battery: c.Battery, Seen: c.Updated})
+	for _, t := range l.tapos {
+		out = append(out, model.Camera{Provider: "tapo", ID: t.ID, Name: t.Name, Kind: "camera", Online: l.tapoUp[t.ID], Enabled: true})
 	}
 	return out
 }
@@ -504,6 +526,10 @@ func (l *live) SyncStatus() (string, string, bool) {
 }
 
 func (l *live) Snapshot(id string) {
+	if tc, ok := l.findTapo(id); ok {
+		go l.tapoShot(tc)
+		return
+	}
 	l.mu.Lock()
 	var cam blinkcloud.Camera
 	if l.home != nil {
@@ -674,11 +700,7 @@ func (l *live) findCamera(id string) (blinkcloud.Camera, bool) {
 
 func (l *live) PrimeWatch(id string) error {
 	l.mu.Lock()
-	if l.home == nil {
-		l.mu.Unlock()
-		return errors.New("not signed in")
-	}
-	cam, ok := l.findCamera(id)
+	run, ok := l.runner(id)
 	if !ok {
 		l.mu.Unlock()
 		return errors.New("camera not found")
@@ -692,7 +714,7 @@ func (l *live) PrimeWatch(id string) error {
 	l.watches[id] = w
 	l.mu.Unlock()
 	l.invalidate()
-	go l.play(ctx, w, cam)
+	go run(ctx, w)
 	time.AfterFunc(30*time.Second, func() {
 		l.mu.Lock()
 		if l.watches[id] == w && w.refs == 0 && !w.panel && w.active && w.cancel != nil {
@@ -710,7 +732,7 @@ func (l *live) Watch(id string) {
 		l.StopWatch()
 		return
 	}
-	cam, ok := l.findCamera(id)
+	run, ok := l.runner(id)
 	if !ok {
 		l.mu.Unlock()
 		l.invalidate()
@@ -737,7 +759,7 @@ func (l *live) Watch(id string) {
 	l.watch, l.panelWatch = w, id
 	l.mu.Unlock()
 	l.invalidate()
-	go l.play(ctx, w, cam)
+	go run(ctx, w)
 }
 
 func (l *live) releasePanelLocked() {
@@ -820,11 +842,7 @@ func (l *live) Watches() []model.Watch {
 
 func (l *live) OpenWatch(id string) (string, error) {
 	l.mu.Lock()
-	if l.home == nil {
-		l.mu.Unlock()
-		return "", errors.New("not signed in")
-	}
-	cam, ok := l.findCamera(id)
+	run, ok := l.runner(id)
 	if !ok {
 		l.mu.Unlock()
 		return "", errors.New("camera not found")
@@ -845,7 +863,7 @@ func (l *live) OpenWatch(id string) (string, error) {
 	l.tokens[token] = w
 	l.mu.Unlock()
 	if start {
-		go l.play(ctx, w, cam)
+		go run(ctx, w)
 	}
 	l.invalidate()
 	return token, nil
